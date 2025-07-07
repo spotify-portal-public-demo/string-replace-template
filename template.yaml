@@ -1,0 +1,193 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: string-replace-template
+  title: String Replace Template
+  description: Update existing entities via string replacement
+spec:
+  owner: group:devex
+  type: migration
+
+  parameters:
+    - title: Entity Filter
+      required:
+        - kind_filter
+      properties:
+        kind_filter:
+          title: Kind Filter
+          type: string # TODO: build list dynamically
+          description: Which entity Kind to search for?
+
+    - title: Find / Replace
+      required:
+        - find_replace_list
+      properties:
+        find_replace_list:
+          title: Find Replace List
+          type: array
+          minItems: 0
+          ui:options:
+            addable: true
+            removable: true
+          items:
+            title: Find/Replace
+            required:
+              - file_filter
+              - find_string
+              - replace_string
+              - use_regex
+            type: object
+            properties:
+              file_filter:
+                title: Which file(s) should be searched? Note - wildcards are supported
+                type: string
+              find_string:
+                title: The string to be replaced
+                type: string
+              replace_string:
+                title: Text to be used to replace the found lines with
+                type: string
+              use_regex:
+                title: Use regex for search?
+                type: boolean
+                default: false
+
+    - title: Add / Remove Files
+      required:
+        - add_file_list
+        - remove_file_list
+      properties:
+        add_file_list:
+          title: Add File List (max 4)
+          type: array
+          minItems: 0
+          maxItems: 4
+          ui:options:
+            addable: true
+            removable: true
+          items:
+            title: Add File
+            required:
+              - file_path
+              - file_contents
+            type: object
+            properties:
+              file_path:
+                title: File Path
+                type: string
+              file_contents:
+                title: File Contents
+                type: string
+                ui:widget: textarea
+                ui:options:
+                  rows: 10
+        remove_file_list:
+          title: Remove File List (coming soon...)
+          description: Once this is deployed - https://github.com/backstage/backstage/pull/30252/files
+          type: array
+          minItems: 0
+          maxItems: 4
+          ui:options:
+            addable: true
+            removable: true
+          items:
+            title: File Path
+            required:
+              - file_path
+            type: string
+
+  steps:
+    - id: get_entities
+      name: Get Entities
+      action: catalog:query:plus
+      input:
+        queries:
+          - limit: 100
+            filter:
+              kind: ${{ parameters.kind_filter }}
+
+    - id: fetch_entities
+      name: Fetch Entity
+      action: fetch:plain
+      each: ${{ steps.get_entities.output.results[0] }}
+      input:
+        url: ${{ each.value.metadata.annotations['backstage.io/source-location'] | replace('url:', '') }}
+        targetPath: ${{ each.value.metadata.name }}
+
+    # note: look into option to allow replacing in hidden (dot) files
+    - id: replace
+      name: Find and Replace
+      action: roadiehq:utils:fs:replace
+      each: ${{ parameters.find_replace_list }}
+      if: ${{ parameters.find_replace_list.length > 0 }}
+      input:
+        files:
+          - file: ${{ '*/' + each.value.file_filter }}
+            find: ${{ each.value.find_string }}
+            replaceWith: ${{ each.value.replace_string }}
+            matchRegex: ${{ each.value.use_regex }}
+
+    - id: add_file_1
+      name: Add File 1
+      action: roadiehq:utils:fs:write
+      each: ${{ steps.get_entities.output.results[0] }}
+      if: ${{ parameters.add_file_list.length > 0 }}
+      input:
+        path: ${{ each.value.metadata.name }}/${{ parameters.add_file_list[0].file_path }}
+        content: ${{ parameters.add_file_list[0].file_contents }}
+
+    - id: add_file_2
+      name: Add File 2
+      action: roadiehq:utils:fs:write
+      each: ${{ steps.get_entities.output.results[0] }}
+      if: ${{ parameters.add_file_list.length > 1 }}
+      input:
+        path: ${{ each.value.metadata.name }}/${{ parameters.add_file_list[1].file_path }}
+        content: ${{ parameters.add_file_list[1].file_contents }}
+
+    - id: add_file_3
+      name: Add File 3
+      action: roadiehq:utils:fs:write
+      each: ${{ steps.get_entities.output.results[0] }}
+      if: ${{ parameters.add_file_list.length > 2 }}
+      input:
+        path: ${{ each.value.metadata.name }}/${{ parameters.add_file_list[2].file_path }}
+        content: ${{ parameters.add_file_list[2].file_contents }}
+
+    - id: add_file_4
+      name: Add File 4
+      action: roadiehq:utils:fs:write
+      each: ${{ steps.get_entities.output.results[0] }}
+      if: ${{ parameters.add_file_list.length > 3 }}
+      input:
+        path: ${{ each.value.metadata.name }}/${{ parameters.add_file_list[3].file_path }}
+        content: ${{ parameters.add_file_list[3].file_contents }}
+
+    # note: this can be done soon: https://github.com/backstage/backstage/pull/30252/files
+    # - id: remove_files
+    #   name: Remove Files
+    #   action: fs:delete
+    #   each: ${{ parameters.remove_file_list }}
+    #   if: ${{ parameters.remove_file_list.length > 0 }}
+    #   input:
+    #     files:
+    #       - ${{ '*/' + each.value }}
+
+    - id: send_prs
+      name: Send PRs
+      action: publish:github:pull-request
+      each: ${{ steps.get_entities.output.results[0] }}
+      input:
+        repoUrl: github.com?owner=${{ each.value.metadata.annotations['github.com/project-slug'].split('/')[0] }}&repo=${{ each.value.metadata.annotations['github.com/project-slug'].split('/')[1] }}
+        branchName: update-from-template
+        title: update from template
+        description: This PR updates the entity with the latest version
+        update: true
+        sourcePath: ${{ each.value.metadata.name }}
+
+  # TODO: try to not send PR if there are no changes, then log message in output
+
+  output:
+    text:
+      - title: PRs Created
+        content: ${{ steps.send_prs.output.remoteUrl.join('  \n') }}
